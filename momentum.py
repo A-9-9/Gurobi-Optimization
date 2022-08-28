@@ -3,10 +3,11 @@ from gurobipy import GRB, quicksum
 import pandas as pd
 import copy
 
-# df usage: df.iloc[:, 2:]
-open_df = pd.read_excel('../result_1.xlsx', sheet_name='open').iloc[160:, :]
-return7comp_df = pd.read_excel('../result_1.xlsx', sheet_name='return7comp').iloc[:, :-3]
+# data frame usage: df.iloc[:, 2:]
 
+open_df = pd.read_excel('../result_1.xlsx', sheet_name='open').iloc[160:, :]
+# return7comp_df = pd.read_excel('../result_1.xlsx', sheet_name='return7comp').iloc[:, :-3]
+return10percent_df = pd.read_excel('../result_1.xlsx', sheet_name='return10percent').iloc[:, :]
 comp_name = list(open_df.iloc[:, 2:].columns)
 
 weight_df = pd.DataFrame(columns=comp_name)
@@ -26,12 +27,14 @@ allocate_minus_df = pd.DataFrame(columns=comp_name)
 shares_plus_df = pd.DataFrame(columns=comp_name)
 shares_minus_df = pd.DataFrame(columns=comp_name)
 
-# for t
+# for
 for t in range(93):
+    date = open_df.iloc[20 * t].loc["Date"]
 
-    # t = 0
-    ret7comp = return7comp_df.iloc[t, 2:]
-    # o = open_df.iloc[20*t, 2:]
+    # index = return7comp_df.iloc[t].loc["index"]
+    index = return10percent_df.iloc[t].loc['index']
+    # ret_comp = return7comp_df.iloc[t, 2:]
+    ret_comp = return10percent_df.iloc[t, 2:]
 
     n = [x for x in range(466)]
     m = gp.Model('momentum')
@@ -49,7 +52,7 @@ for t in range(93):
         weight_plus_previous = [x / budget for x in long_position]
         weight_minus_previous = [x / budget for x in short_position]
 
-    # coefficient setting
+    # coefficient
     buy_position = {x: 0 for x in n}
     shortsell_position = {x: 0 for x in n}
     ts1 = ts2 = ts3 = ts4 = 0.0025
@@ -58,15 +61,15 @@ for t in range(93):
     margin = 1
 
     for i in n:
-        if ret7comp[i] == 1:
+        if ret_comp[i] == 1:
             buy_position[i] = 1
-        elif ret7comp[i] == -1:
+        elif ret_comp[i] == -1:
             shortsell_position[i] = 1
         else:
             buy_position[i] = 0
             shortsell_position[i] = 0
 
-    # variable setting
+    # variable
     e_plus = {}
     e_minus = {}
     weight = {}
@@ -89,24 +92,26 @@ for t in range(93):
         weight_repurchasing[i] = m.addVar(lb=0.0, ub=1.0, name="weight-repurchasing-%s" % i)
     m.update()
 
-    # objective setting
+    # objective
     entropy = quicksum(e_plus[i] + e_minus[i] for i in n)
     m_obj = -entropy - quicksum(
         weight_buying[i] * ts1 + weight_selling[i] * ts2 + weight_shortsell[i] * ts3 + weight_repurchasing[i] * ts4 for
-        i in
-        n)
+        i in n)
     m.setObjective(m_obj, GRB.MAXIMIZE)
 
-    # constrain setting
     '''
-    the different between first and others period is that the first period do not have previous weight plus and minus
+    constrain
+    the different between first and others period is that 
+    the first period do not have previous weight plus and minus, 
     and the others period needs to consider the rebal each 20 days 
     '''
     m.addConstr(quicksum(
         weight_plus[i] + margin * weight_minus[i] + weight_buying[i] * ts1 + weight_selling[i] * ts2 + weight_shortsell[
             i] * ts3 + weight_repurchasing[i] * ts4 for i in n) == 1)
     for i in n:
-        m.addConstr(weight_plus[i] + weight_minus[i] - e_plus[i] + e_minus[i] == 1 / 14)
+        # m.addConstr(weight_plus[i] + weight_minus[i] - e_plus[i] + e_minus[i] == 1 / 14)
+        m.addConstr(weight_plus[i] + weight_minus[i] - e_plus[i] + e_minus[i] == 1 / (46 * 2))
+
         m.addConstr(weight_plus[i] == weight_plus_previous[i] + weight_buying[i] - weight_selling[i])
         m.addConstr(weight_minus[i] == weight_minus_previous[i] + weight_shortsell[i] - weight_repurchasing[i])
         m.addConstr(weight[i] == weight_plus[i] + weight_minus[i])
@@ -123,22 +128,17 @@ for t in range(93):
 
     m.optimize()
 
-    # print('m_obj %s' % m.getObjective().getValue())
+    # get the result after optimize
+    # result write into dataframe
     ts_zip = zip([wb.x * ts1 for wb in weight_buying.values()], [v.x * ts2 for v in weight_selling.values()],
                  [v.x * ts3 for v in weight_shortsell.values()], [v.x * ts4 for v in weight_repurchasing.values()])
-
-    date = open_df.iloc[20 * t].loc["Date"]
-    index = return7comp_df.iloc[t].loc["index"]
     obj = m.getObjective().getValue()
     share_plus = sum([1 for v in weight_plus.values() if v.x > 0])
     share_minus = sum([1 for v in weight_minus.values() if v.x > 0])
     weight_transaction_cost = sum([a + b + c + d for a, b, c, d in ts_zip])
     ts = budget * weight_transaction_cost
-
     result = [index, date, budget, obj, share_plus, share_minus, weight_transaction_cost, ts]
-    # print('ts_c %s' % transaction_cost)
-    # get the result after optimize
-    # result write into dataframe
+
     e_plus_df.loc[t] = [v.x for k, v in e_plus.items()]
     e_minus_df.loc[t] = [v.x for k, v in e_minus.items()]
     weight_df.loc[t] = [v.x for k, v in weight.items()]
@@ -155,23 +155,7 @@ for t in range(93):
     shares_plus_df.loc[t] = [x / y for x, y in zip(allocate_plus_df.iloc[t], open_df.iloc[20 * t, 2:])]
     shares_minus_df.loc[t] = [x / y for x, y in zip(allocate_minus_df.iloc[t], open_df.iloc[20 * t, 2:])]
 
-# market_value_df = pd.DataFrame(columns=['Market value'])
-# allocate_plus_df = pd.DataFrame(columns=comp_name)
-# allocate_minus_df = pd.DataFrame(columns=comp_name)
-# shares_plus_df = pd.DataFrame(columns=comp_name)
-# shares_minus_df = pd.DataFrame(columns=comp_name)
-
-
-# df = pd.read_excel('../result_1.xlsx', sheet_name='return7comp')
-# ret7comp = copy.deepcopy(df.iloc[0:1, 2:-3])
-# comp_name = list(ret7comp.columns)
-# w_p, w_m = [v.x for k, v in weight_plus.items()], [v.x for k, v in weight_minus.items()]
-# w_plus_df, w_minus_df = pd.DataFrame(columns=list(comp_name), ), pd.DataFrame(columns=list(comp_name), )
-#
-# w_plus_df.loc[len(w_plus_df.index)] = w_p
-# w_minus_df.loc[len(w_minus_df.index)] = w_m
-
-with pd.ExcelWriter('0828.xlsx') as writer:
+with pd.ExcelWriter('0828_10percent.xlsx') as writer:
     weight_df.to_excel(writer, sheet_name='weight')
     weight_plus_df.to_excel(writer, sheet_name='weight_plus')
     weight_minus_df.to_excel(writer, sheet_name='weight_minus')
